@@ -40,7 +40,7 @@ func main() {
 		teamID := c.Query("teamID")
 		username := c.Query("username")
 
-		wsURL := "ws://" + c.Hostname() + "/websocket?gameID=" + gameID + "&teamID=" + teamID + "&username=" + username
+		wsURL := "wss://" + c.Hostname() + "/websocket?gameID=" + gameID + "&teamID=" + teamID + "&username=" + username
 		fmt.Println(wsURL)
 		var buf bytes.Buffer
 		if err := indexTemplate.Execute(&buf, wsURL); err != nil {
@@ -65,7 +65,7 @@ func main() {
 	// tlsKey := "key.pem"
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8082"
 	}
 
 	if err := app.Listen(":" + port); err != nil {
