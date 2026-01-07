@@ -52,8 +52,26 @@ const pendingNames = new Set();
 navigator.mediaDevices.getUserMedia({ audio: true })
   .then(stream => {
     document.getElementById("localAudio").srcObject = stream;
-    const pc = new RTCPeerConnection();
-
+    const pc = new RTCPeerConnection({
+          iceServers: [
+            {
+              urls: [
+                "turn:global.relay.metered.ca:80?transport=tcp",
+                "turn:global.relay.metered.ca:443?transport=tcp"
+              ],
+              username: "fd09f21aad0c834cb5c69447",
+              credential: "VsUmB01i5+KwCDPN"
+            },
+            {
+              urls: [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302"
+              ]
+            }
+          ],
+          iceTransportPolicy: 'all',
+          iceCandidatePoolSize: 10
+        });
     // Add local audio tracks
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
