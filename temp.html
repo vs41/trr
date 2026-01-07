@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebRTC Audio Debug</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+    .status-connecting { background: #fff3cd; }
+    .status-connected { background: #d4edda; }
+    .status-failed { background: #f8d7da; }
+    #logs { max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h2>WebRTC Audio Debug</h2>
+  
+  <div id="status" class="status-connecting">Status: Connecting...</div>
+  
+  <section>
+    <h3>Local Audio</h3>
+    <audio id="localAudio" autoplay muted controls></audio>
+  </section>
+  
+  <section>
+    <h3>Remote Audio</h3>
+    <div id="remoteAudios"></div>
+  </section>
+  
+  <section>
+    <h3>Connection Info</h3>
+    <div id="connectionInfo"></div>
+  </section>
+  
+  <section>
+    <h3>Logs</h3>
+    <div id="logs"></div>
+  </section>
+
+  <script>
+    const log = (msg, level = 'info') => {
+      const timestamp = new Date().toLocaleTimeString();
+      const logMsg = `[${timestamp}] ${msg}`;
+      console.log(logMsg);
+      
+      const div = document.getElementById("logs");
+      const color = level === 'error' ? 'red' : level === 'warn' ? 'orange' : 'black';
+      div.innerHTML += `<span style="color: ${color}">${logMsg}</span><br>`;
+      div.scrollTop = div.scrollHeight;
+    };
+
+    const updateStatus = (msg, state) => {
+      const statusDiv = document.getElementById("status");
+      statusDiv.textContent = `Status: ${msg}`;
+      statusDiv.className = `status-${state}`;
+    };
+
+    const wsURL = "wss://v222-j7vv.onrender.com/websocket?gameID=28&teamID=1&unitID=47&encyptionOn=0&username=blue1&radioRange=40";
+    const urlParams = new URLSearchParams(wsURL.split('?')[1]);
+    const currentUsername = urlParams.get('username') || "Unknown";
+    
+    log(`🔧 Initializing for user: ${currentUsername}`);
+
+    const remoteUsers = {};
+    const pendingNames = new Set();
+    let pc;
+    let ws;
+
+    // ICE candidate statistics
+    let iceStats = {
+      host: 0,
+      srflx: 0,  // STUN candidates
+      relay: 0   // TURN candidates
+    };
+
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(stream => {
+        log("✅ Microphone access granted");
+        document.getElementById("localAudio").srcObject = stream;
+        
+        // Create PeerConnection with more aggressive ICE settings
+        pc = new RTCPeerConnection({
+          iceServers: [
+            {
+              urls: [
+                "turn:global.relay.metered.ca:80?transport=tcp",
+                "turn:global.relay.metered.ca:443?transport=tcp"
+              ],
+              username: "fd09f21aad0c834cb5c69447",
+              credential: "VsUmB01i5+KwCDPN"
+            },
+            {
+              urls: [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302"
+              ]
+            }
+          ],
+          iceTransportPolicy: 'all',
+          iceCandidatePoolSize: 10
+        });
+
+        // Add local tracks
+        stream.getTracks().forEach(track => {
+          pc.addTrack(track, stream);
+          log(`📤 Added local track: ${track.kind}`);
+        });
+
+        // Monitor ICE connection state
+        pc.oniceconnectionstatechange = () => {
+          log(`🧊 ICE Connection State: ${pc.iceConnectionState}`);
+          
+          switch (pc.iceConnectionState) {
+            case 'checking':
+              updateStatus('Checking connection...', 'connecting');
+              break;
+            case 'connected':
+              updateStatus('Connected!', 'connected');
+              displayConnectionInfo();
+              break;
+            case 'completed':
+              updateStatus('Connection completed', 'connected');
+              break;
+            case 'failed':
+              updateStatus('Connection failed - check TURN server', 'failed');
+              log('❌ ICE connection failed. Check:', 'error');
+              log('  1. TURN server credentials', 'error');
+              log('  2. Network firewall rules', 'error');
+              log('  3. Another peer must be connected', 'error');
+              break;
+            case 'disconnected':
+              updateStatus('Disconnected', 'failed');
+              log('⚠️ Connection lost', 'warn');
+              break;
+          }
+        };
+
+        // Monitor ICE gathering state
+        pc.onicegatheringstatechange = () => {
+          log(`🔍 ICE Gathering State: ${pc.iceGatheringState}`);
+          
+          if (pc.iceGatheringState === 'complete') {
+            log(`📊 ICE Stats - Host: ${iceStats.host}, STUN: ${iceStats.srflx}, TURN: ${iceStats.relay}`);
+            
+            if (iceStats.relay === 0) {
+              log('⚠️ No TURN candidates! TURN server may be unreachable', 'warn');
+            }
+          }
+        };
+
+        // Track ICE candidates
+        pc.onicecandidate = (e) => {
+          if (e.candidate) {
+            const c = e.candidate;
+            log(`🧊 ICE Candidate: ${c.type} (${c.protocol}) ${c.address}:${c.port}`);
+            
+            // Track candidate types
+            if (c.type === 'host') iceStats.host++;
+            else if (c.type === 'srflx') iceStats.srflx++;
+            else if (c.type === 'relay') iceStats.relay++;
+            
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                event: "candidate",
+                data: JSON.stringify(e.candidate)
+              }));
+            }
+          } else {
+            log("🏁 ICE gathering complete");
+          }
+        };
+
+        // Handle incoming tracks
+        pc.ontrack = (event) => {
+          if (event.track.kind !== "audio") return;
+          
+          log(`🎧 New remote track: ${event.track.id}`);
+
+          const el = document.createElement("audio");
+          el.srcObject = event.streams[0];
+          el.autoplay = true;
+          el.controls = true;
+
+          const container = document.createElement("div");
+          const nameLabel = document.createElement("p");
+          nameLabel.textContent = "🎤 Unknown user";
+          nameLabel.style.fontWeight = "bold";
+
+          container.appendChild(nameLabel);
+          container.appendChild(el);
+          document.getElementById("remoteAudios").appendChild(container);
+
+          remoteUsers[event.track.id] = { element: container, nameLabel, username: null };
+
+          if (pendingNames.size > 0) {
+            const nextName = pendingNames.values().next().value;
+            pendingNames.delete(nextName);
+            nameLabel.textContent = `🎤 ${nextName}`;
+            remoteUsers[event.track.id].username = nextName;
+            log(`✅ Assigned ${nextName} to track`);
+          }
+        };
+
+        // WebSocket setup
+        ws = new WebSocket(wsURL);
+
+        ws.onopen = () => {
+          log("✅ WebSocket connected");
+          updateStatus('WebSocket connected, waiting for peer...', 'connecting');
+        };
+
+        ws.onerror = (error) => {
+          log(`❌ WebSocket error: ${error}`, 'error');
+          updateStatus('WebSocket error', 'failed');
+        };
+
+        ws.onclose = (event) => {
+          log(`⚠️ WebSocket closed: ${event.code} - ${event.reason}`, 'warn');
+          updateStatus('Disconnected', 'failed');
+        };
+
+        ws.onmessage = (evt) => {
+          let msg;
+          try { 
+            msg = JSON.parse(evt.data); 
+          } catch (err) { 
+            log(`Failed to parse: ${evt.data}`, 'error');
+            return;
+          }
+
+          switch (msg.event) {
+            case "offer": {
+              const offer = JSON.parse(msg.data);
+              const username = msg.user || "Unknown";
+              log(`📨 Received offer from ${username}`);
+
+              if (username !== currentUsername) {
+                let labeled = false;
+                for (const trackId in remoteUsers) {
+                  const track = remoteUsers[trackId];
+                  if (track.nameLabel.textContent === "🎤 Unknown user") {
+                    track.nameLabel.textContent = `🎤 ${username}`;
+                    track.username = username;
+                    labeled = true;
+                    log(`✅ Labeled track as ${username}`);
+                    break;
+                  }
+                }
+                if (!labeled) {
+                  pendingNames.add(username);
+                  log(`🕓 Queued username: ${username}`);
+                }
+              }
+
+              pc.setRemoteDescription(offer)
+                .then(() => pc.createAnswer())
+                .then(answer => {
+                  pc.setLocalDescription(answer);
+                  if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ 
+                      event: "answer", 
+                      data: JSON.stringify(answer) 
+                    }));
+                  }
+                  log(`✅ Sent answer to ${username}`);
+                })
+                .catch(err => log(`Error handling offer: ${err}`, 'error'));
+              break;
+            }
+
+            case "candidate": {
+              const candidate = JSON.parse(msg.data);
+              pc.addIceCandidate(candidate)
+                .catch(err => log(`ICE add error: ${err}`, 'error'));
+              break;
+            }
+
+            case "removeTrack": {
+              const removeUser = msg.user;
+              log(`🗑 Removing track for: ${removeUser}`);
+
+              for (const id in remoteUsers) {
+                const entry = remoteUsers[id];
+                if (entry.username === removeUser) {
+                  const audioEl = entry.element.querySelector("audio");
+                  if (audioEl?.srcObject) {
+                    audioEl.srcObject.getTracks().forEach(track => track.stop());
+                  }
+                  entry.element.remove();
+                  delete remoteUsers[id];
+                  log(`✅ Cleaned up ${removeUser}`);
+                }
+              }
+              break;
+            }
+
+            case "ice_failed":
+            case "connection_failed":
+              log(`❌ ${msg.event}: ${msg.data}`, 'error');
+              updateStatus(msg.data, 'failed');
+              break;
+
+            case "connected":
+              log(`✅ ${msg.data}`);
+              break;
+
+            default:
+              log(`Unknown event: ${msg.event}`, 'warn');
+          }
+        };
+
+      })
+      .catch(err => {
+        log(`❌ Microphone error: ${err}`, 'error');
+        updateStatus('Microphone access denied', 'failed');
+        alert("Microphone error: " + err);
+      });
+
+    // Display connection statistics
+    function displayConnectionInfo() {
+      if (!pc) return;
+      
+      pc.getStats().then(stats => {
+        let info = '<h4>Active Connection:</h4>';
+        stats.forEach(report => {
+          if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+            info += `<p><strong>Local:</strong> ${report.localCandidateId}<br>`;
+            info += `<strong>Remote:</strong> ${report.remoteCandidateId}<br>`;
+            info += `<strong>Bytes Sent:</strong> ${report.bytesSent}<br>`;
+            info += `<strong>Bytes Received:</strong> ${report.bytesReceived}</p>`;
+          }
+        });
+        document.getElementById('connectionInfo').innerHTML = info;
+      });
+    }
+
+    // Refresh connection info every 5 seconds when connected
+    setInterval(() => {
+      if (pc && pc.iceConnectionState === 'connected') {
+        displayConnectionInfo();
+      }
+    }, 5000);
+  </script>
+</body>
+</html>

@@ -32,16 +32,20 @@ func main() {
 
 	app := fiber.New()
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: "https://v222-j7vv.onrender.com",
+		AllowOrigins: "https://astt.live",
 	}))
 	// Serve index.html
 	app.Get("/", func(c *fiber.Ctx) error {
-		// gameID := c.Query("gameID")
-		// teamID := c.Query("teamID")
-		// username := c.Query("username")
+		unitID := c.Query("unitID", "1") // default = 1
+		teamID := c.Query("teamID", "1") // default = 1
+		username := c.Query("username", "user"+unitID)
 
-		wsURL := "wss://v222-j7vv.onrender.com/websocket?gameID=28&teamID=1&unitID=47&encyptionOn=0&username=blue1&radioRange=40"
-		fmt.Println(wsURL)
+		wsURL := fmt.Sprintf(
+			"wss://astt.live/voipsocket?gameID=28&teamID=%s&unitID=%s&encyptionOn=0&username=%s&radioRange=40",
+			teamID, unitID, username,
+		)
+		fmt.Println("WebSocket URL:", wsURL)
+
 		var buf bytes.Buffer
 		if err := indexTemplate.Execute(&buf, wsURL); err != nil {
 			return err
@@ -67,8 +71,6 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	// tlsCert := "/home/vishal_s/Documents/key/cert.pem"
-	// tlsKey := "/home/vishal_s/Documents/key/key.pem"
 	if err := app.Listen(":" + port); err != nil {
 		log.Errorf("Failed to start Fiber server: %v", err)
 	}

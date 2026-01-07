@@ -1,4 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>WebRTC Audio Demo</title>
+<style>
+  main { font-family: sans-serif; padding: 1rem; }
+  section { margin-bottom: 1rem; }
+  .remote-audio-item { margin-bottom: 0.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h2>WebRTC Audio Only Demo</h2>
 
+  <section>
+    <h3>Local Audio</h3>
+    <audio id="localAudio" autoplay muted controls></audio>
+  </section>
+
+  <section>
+    <h3>Remote Audio</h3>
+    <div id="remoteAudios"></div>
+  </section>
+
+  <section>
+    <h3>Logs</h3>
+    <div id="logs"></div>
+  </section>
+</main>
+
+<script>
+const log = (msg) => {
+  console.log(msg);
+  const div = document.getElementById("logs");
+  div.innerHTML += msg + "<br>";
+  div.scrollTop = div.scrollHeight;
+};
+
+// Injected WebSocket URL from server
+const wsURL = "{{.}}";
+log("Connecting to WebSocket: " + wsURL);
+
+const urlParams = new URLSearchParams(wsURL.split('?')[1]);
+const currentUsername = urlParams.get('username') || "Unknown";
+log("Your username: " + currentUsername);
+
+// Remote users map
+const remoteUsers = {};
+const pendingNames = new Set();
+
+navigator.mediaDevices.getUserMedia({ audio: true })
+  .then(stream => {
+    document.getElementById("localAudio").srcObject = stream;
+    const pc = new RTCPeerConnection();
+
+    // Add local audio tracks
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+    // Handle incoming remote tracks
+    pc.ontrack = (event) => {
+      if (event.track.kind !== "audio") return;
+
+      const el = document.createElement("audio");
+      el.srcObject = event.streams[0];
+      el.autoplay = true;
+      el.controls = true;
+
+      const container = document.createElement("div");
+      container.className = "remote-audio-item";
+
+      const nameLabel = document.createElement("p");
+      nameLabel.textContent = "🎤 Unknown user";
+      nameLabel.style.fontWeight = "bold";
+
+      container.appendChild(nameLabel);
+      container.appendChild(el);
+      document.getElementById("remoteAudios").appendChild(container);
+
+      remoteUsers[event.track.id] = { element: container, nameLabel, username: null };
+
+      // Assign queued username if exists
+      if (pendingNames.size > 0) {
+        const nextName = pendingNames.values().next().value;
+        pendingNames.delete(nextName);
+        nameLabel.textContent = `🎤 ${nextName}`;
+        remoteUsers[event.track.id].username = nextName;
+      }
+    };
+
+    const ws = new WebSocket(wsURL);
+
+    ws.onopen = () => log("WebSocket connected ✅");
+    ws.onclose = (event) => log("WebSocket disconnected ❌ Code: " + event.code);
+    ws.onerror = (err) => log("WebSocket error: " + err);
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event: "candidate", data: JSON.stringify(e.candidate) }));
+      }
+    };
+
+    ws.onmessage = (evt) => {
+      let msg;
+      try { msg = JSON.parse(evt.data); } 
+      catch (err) { return log("Failed to parse message: " + evt.data); }
+
+      switch (msg.event) {
+        case "offer": {
+          const offer = JSON.parse(msg.data);
+          const username = msg.user || "Unknown";
+          log("Received offer from " + username);
+
+          if (username !== currentUsername) {
+            // Assign username to track or queue
+            let labeled = false;
+            for (const trackId in remoteUsers) {
+              const track = remoteUsers[trackId];
+              if (track.nameLabel.textContent === "🎤 Unknown user") {
+                track.nameLabel.textContent = `🎤 ${username}`;
+                track.username = username;
+                labeled = true;
+                break;
+              }
+            }
+            if (!labeled) pendingNames.add(username);
+          }
+
+          pc.setRemoteDescription(offer)
+            .then(() => pc.createAnswer())
+            .then(answer => {
+              pc.setLocalDescription(answer);
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ event: "answer", data: JSON.stringify(answer) }));
+              }
+            })
+            .catch(err => log("Offer handling error: " + err));
+          break;
+        }
+
+        case "candidate": {
+          const candidate = JSON.parse(msg.data);
+          pc.addIceCandidate(candidate).catch(err => log("ICE add error: " + err));
+          break;
+        }
+
+        case "removeTrack": {
+          const removeUser = msg.user;
+          for (const id in remoteUsers) {
+            const entry = remoteUsers[id];
+            if (entry.username === removeUser) {
+              const audioEl = entry.element.querySelector("audio");
+              if (audioEl?.srcObject) audioEl.srcObject.getTracks().forEach(track => track.stop());
+              entry.element.remove();
+              delete remoteUsers[id];
+            }
+          }
+          break;
+        }
+
+        default:
+          log("Unknown event: " + msg.event);
+      }
+    };
+
+  })
+  .catch(err => {
+    alert("Microphone error: " + err);
+    log("Microphone error: " + err);
+  });
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- 
 
 
     <main>
@@ -30,7 +219,7 @@
     div.scrollTop = div.scrollHeight;
   };
 
-  const wsURL = "wss://v222-j7vv.onrender.com/websocket?gameID=28&teamID=1&unitID=47&encyptionOn=0&username=blue1&radioRange=40";
+  const wsURL = "wss://astt.live/voipsocket?gameID=28&teamID=1&unitID=47&encyptionOn=0&username=blue1&radioRange=40";
   const urlParams = new URLSearchParams(wsURL.split('?')[1]);
   const currentUsername = urlParams.get('username') || "Unknown";
   log("Your username: " + currentUsername);
@@ -200,4 +389,4 @@ ws.onopen = () => {
       alert("Microphone error: " + err);
       log("Microphone error: " + err);
     });
-</script>
+</script> -->
